@@ -1,0 +1,12 @@
+.gradle
+build
+.idea/
+*.iml
+.project
+.settings/
+.classpath
+nbactions.xml
+nb-configuration.xml
+nbproject/
+# JVM crash / hotspot logs + local build logs
+*.log
