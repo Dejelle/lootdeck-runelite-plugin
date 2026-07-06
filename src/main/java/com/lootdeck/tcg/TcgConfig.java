@@ -10,7 +10,8 @@ public interface TcgConfig extends Config
 	@ConfigItem(
 		keyName = "token",
 		name = "Account token",
-		description = "Set automatically after linking. Do not share.",
+		description = "Set automatically after linking. Do not share. While linked, the plugin sends "
+			+ "your account hash, display name and qualifying gameplay events to the LootDeck service.",
 		secret = true,
 		position = 1
 	)
@@ -23,7 +24,8 @@ public interface TcgConfig extends Config
 	@ConfigItem(
 		keyName = "token",
 		name = "Account token",
-		description = "Set automatically after linking. Do not share.",
+		description = "Set automatically after linking. Do not share. While linked, the plugin sends "
+			+ "your account hash, display name and qualifying gameplay events to the LootDeck service.",
 		secret = true,
 		position = 1
 	)

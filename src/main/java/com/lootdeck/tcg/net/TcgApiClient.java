@@ -27,7 +27,7 @@ public class TcgApiClient
 	// Sent on every request so the API can tag genuine-plugin traffic. DETECTION SIGNAL ONLY —
 	// trivially spoofable, so the server must never grant or deny based on it (IMPLEMENTATION-PLAN Phase 2).
 	private static final String CLIENT_ID = "runelite-plugin";
-	private static final String PLUGIN_VERSION = "1.0-SNAPSHOT"; // keep in sync with build.gradle version
+	private static final String PLUGIN_VERSION = "1.0"; // keep in sync with build.gradle + runelite-plugin.properties version
 
 	private final OkHttpClient http;
 	private final Gson gson;

@@ -231,6 +231,16 @@ public class TcgPanel extends PluginPanel
 			help.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 			help.setAlignmentX(Component.LEFT_ALIGNMENT);
 			content.add(help);
+			// Plugin Hub data-sharing disclosure — shown in-client BEFORE the user opts in by linking.
+			JLabel disclosure = new JLabel("<html>Linking is opt-in. Once linked, the plugin sends your"
+				+ " account hash, display name and qualifying gameplay events (activity ids, gathered"
+				+ " item ids + quantities) to the LootDeck service. It never sends chat, bank contents,"
+				+ " location or passwords.</html>");
+			disclosure.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			disclosure.setFont(disclosure.getFont().deriveFont(11f));
+			disclosure.setBorder(BorderFactory.createEmptyBorder(4, 0, 2, 0));
+			disclosure.setAlignmentX(Component.LEFT_ALIGNMENT);
+			content.add(disclosure);
 			FlatTextField code = new FlatTextField();
 			code.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 			code.setHoverBackgroundColor(ColorScheme.DARKER_GRAY_HOVER_COLOR);
@@ -256,6 +266,7 @@ public class TcgPanel extends PluginPanel
 		{
 			content.add(header("Linked"));
 			content.add(body("Linked as " + (rsn.isEmpty() ? "your account" : rsn)));
+			content.add(muted("<html>Sending qualifying gameplay to the LootDeck service.</html>"));
 		}
 
 		// Booster release picker — which card release NEW packs come from. With a single
