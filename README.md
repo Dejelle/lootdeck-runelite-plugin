@@ -6,6 +6,13 @@ Earn a collectible trading card while you play Old School RuneScape. The plugin 
 and read-only**: it reports qualifying gameplay to the LootDeck service and shows a drop when the
 server awards a pack. It does **not** automate anything or affect gameplay.
 
+## Development
+
+Day-to-day development happens in the main LootDeck project (a private monorepo that also
+holds the website and API); this repository tracks **Plugin Hub releases** — each release
+lands here as a single sync commit. Issues and PRs are welcome here, but fixes are usually
+ported into the main project and flow back through the next release commit.
+
 ## Network usage disclosure (Plugin Hub requirement)
 
 - **Opt-in:** nothing is sent until you link your account (paste a code from the website).
