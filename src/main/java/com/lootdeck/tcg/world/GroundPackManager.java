@@ -38,8 +38,9 @@ public class GroundPackManager
 	private static final int FALLBACK_MODEL_ID = 2426;
 	// Mesh scale in 1/128 units (128 = original). A bar is small on a tile, so enlarge it a bit.
 	private static final int PACK_SCALE = 160;
-	// Orientation step per tick for the top ("dragon") tier's slow spin. 2048 = full turn.
+	// Orientation step per tick. 2048 = full turn. Dragon spins faster than the rest.
 	private static final int SPIN_STEP = 32;
+	private static final int SPIN_STEP_SLOW = 12;
 	private static final String TOP_TIER = "dragon";
 
 	private final Client client;
@@ -51,6 +52,8 @@ public class GroundPackManager
 	private final Map<String, WorldPoint> tiles = new ConcurrentHashMap<>();
 	// pendingPackId -> tier, so per-tick effects (spin) know which objects to animate.
 	private final Map<String, String> tierById = new ConcurrentHashMap<>();
+	// pendingPackId -> worldview id the object was registered into (boats are sub-worldviews).
+	private final Map<String, Integer> wvById = new ConcurrentHashMap<>();
 	// tier -> built+lit model, cached (geometry is read-only and safe to share across objects).
 	private final Map<String, Model> modelCache = new ConcurrentHashMap<>();
 	// Resolved once: the bar's inventory model id (-1 = unresolved, -2 = resolution failed).
@@ -70,39 +73,50 @@ public class GroundPackManager
 		{
 			return;
 		}
-		clientThread.invoke(() ->
-		{
-			try
-			{
-				LocalPoint lp = LocalPoint.fromWorld(client, wp);
-				if (lp == null)
-				{
-					log.debug("[LootDeck] drop tile off-scene; skipping world object");
-					return;
-				}
-				Model model = modelFor(tier);
-				if (model == null)
-				{
-					log.debug("[LootDeck] pack model not loaded; skipping world object");
-					return;
-				}
-				RuneLiteObject o = client.createRuneLiteObject();
-				o.setModel(model);
-				o.setLocation(lp, client.getPlane());
-				o.setActive(true);
-				objects.put(pendingPackId, o);
-				tiles.put(pendingPackId, wp);
-				tierById.put(pendingPackId, tier == null ? "" : tier);
-			}
-			catch (Throwable t)
-			{
-				// Cosmetic only — never let a scene error escape.
-				log.warn("[LootDeck] world object spawn failed: {}", t.toString());
-			}
-		});
+		clientThread.invoke(() -> spawnOnClientThread(pendingPackId, wp, tier));
 	}
 
-	/** Rotate top-tier ground packs a touch each tick. Must be called on the client thread. */
+	/** The actual scene mutation. MUST run on the client thread (spawn / respawnMissing call it). */
+	private void spawnOnClientThread(String pendingPackId, WorldPoint wp, String tier)
+	{
+		try
+		{
+			LocalPoint lp = LocalPoint.fromWorld(client, wp);
+			if (lp == null)
+			{
+				log.debug("[LootDeck] drop tile off-scene; skipping world object");
+				return;
+			}
+			Model model = modelFor(tier);
+			if (model == null)
+			{
+				log.debug("[LootDeck] pack model not loaded; skipping world object");
+				return;
+			}
+			RuneLiteObject o = client.createRuneLiteObject();
+			o.setModel(model);
+			// Use the WorldPoint's plane, NOT client.getPlane() (the top-level plane): when lp
+			// resolves into a boat sub-worldview, LocalPoint.fromWorld already matched wp's plane,
+			// and the top-level plane would be wrong — the object rides the boat's worldview.
+			o.setLocation(lp, wp.getPlane());
+			// Sits flush on the ground tile — setLocation already put z at the tile's ground
+			// height. We deliberately DON'T lift it into the air: it reads as a real ground drop
+			// and stays visually anchored to its highlight. Visibility among other loot comes
+			// from the GroundPackHighlightOverlay (pulsing tile + label) and the per-tick spin.
+			o.setActive(true);
+			objects.put(pendingPackId, o);
+			tiles.put(pendingPackId, wp);
+			tierById.put(pendingPackId, tier == null ? "" : tier);
+			wvById.put(pendingPackId, lp.getWorldView());
+		}
+		catch (Throwable t)
+		{
+			// Cosmetic only — never let a scene error escape.
+			log.warn("[LootDeck] world object spawn failed: {}", t.toString());
+		}
+	}
+
+	/** Rotate ground packs a touch each tick — dragon faster. Must be called on the client thread. */
 	public void tickSpin()
 	{
 		if (objects.isEmpty())
@@ -111,17 +125,15 @@ public class GroundPackManager
 		}
 		for (Map.Entry<String, RuneLiteObject> e : objects.entrySet())
 		{
-			if (TOP_TIER.equals(tierById.get(e.getKey())))
+			int step = TOP_TIER.equals(tierById.get(e.getKey())) ? SPIN_STEP : SPIN_STEP_SLOW;
+			RuneLiteObject o = e.getValue();
+			try
 			{
-				RuneLiteObject o = e.getValue();
-				try
-				{
-					o.setOrientation((o.getOrientation() + SPIN_STEP) & 2047);
-				}
-				catch (Throwable ignored)
-				{
-					// cosmetic — ignore
-				}
+				o.setOrientation((o.getOrientation() + step) & 2047);
+			}
+			catch (Throwable ignored)
+			{
+				// cosmetic — ignore
 			}
 		}
 	}
@@ -219,9 +231,85 @@ public class GroundPackManager
 		return objects.containsKey(pendingPackId);
 	}
 
+	/** True if the cosmetic object is currently spawned in the scene (audit M9). */
+	public boolean isVisible(String pendingPackId)
+	{
+		return objects.containsKey(pendingPackId);
+	}
+
+	/** True if we still track this pack's claim (its tile is known), even if its object despawned. */
+	public boolean isKnown(String pendingPackId)
+	{
+		return tiles.containsKey(pendingPackId);
+	}
+
+	/**
+	 * Drop the cosmetic objects (a scene reload invalidated them) but KEEP the claim bookkeeping
+	 * (tiles/tierById/wvById) so the pack is still claimable and respawnMissing can re-place it
+	 * once the new scene is loaded (audit M9). Must be paired with respawnMissing() on the next tick.
+	 */
+	public void despawnObjectsKeepClaims()
+	{
+		for (Map.Entry<String, RuneLiteObject> e : objects.entrySet())
+		{
+			final RuneLiteObject o = e.getValue();
+			clientThread.invoke(() ->
+			{
+				try
+				{
+					o.setActive(false);
+				}
+				catch (Throwable ignored)
+				{
+				}
+			});
+		}
+		objects.clear();
+	}
+
+	/**
+	 * Re-place any known pack whose object is missing (e.g. after despawnObjectsKeepClaims on a
+	 * scene load). Client thread only. A pack whose tile is off the new scene stays claimable via
+	 * the sidebar; it simply isn't re-spawned this time.
+	 */
+	public void respawnMissing()
+	{
+		for (Map.Entry<String, WorldPoint> e : tiles.entrySet())
+		{
+			final String id = e.getKey();
+			if (!objects.containsKey(id))
+			{
+				String tier = tierById.get(id);
+				spawnOnClientThread(id, e.getValue(), tier == null ? "" : tier);
+			}
+		}
+	}
+
 	public WorldPoint tileOf(String pendingPackId)
 	{
 		return tiles.get(pendingPackId);
+	}
+
+	/**
+	 * Despawn every pack whose object was registered in the given worldview (e.g. the player's
+	 * boat docked/despawned). Returns the affected pending ids so the caller can surface a
+	 * sidebar-claim fallback — the server-side pack stays claimable until expiry.
+	 */
+	public java.util.List<String> despawnWorldView(int worldViewId)
+	{
+		java.util.List<String> lost = new java.util.ArrayList<>();
+		for (Map.Entry<String, Integer> e : wvById.entrySet())
+		{
+			if (e.getValue() != null && e.getValue() == worldViewId)
+			{
+				lost.add(e.getKey());
+			}
+		}
+		for (String id : lost)
+		{
+			despawn(id);
+		}
+		return lost;
 	}
 
 	/** Remove a specific spawned pack. */
@@ -229,6 +317,7 @@ public class GroundPackManager
 	{
 		tiles.remove(pendingPackId);
 		tierById.remove(pendingPackId);
+		wvById.remove(pendingPackId);
 		RuneLiteObject o = objects.remove(pendingPackId);
 		if (o != null)
 		{
@@ -251,5 +340,32 @@ public class GroundPackManager
 		{
 			despawn(id);
 		}
+	}
+
+	/** Immutable snapshot row for the highlight overlay. */
+	public static final class Spawned
+	{
+		public final String id;
+		public final WorldPoint tile;
+		public final String tier;
+
+		Spawned(String id, WorldPoint tile, String tier)
+		{
+			this.id = id;
+			this.tile = tile;
+			this.tier = tier;
+		}
+	}
+
+	/** Per-frame snapshot of spawned packs. Safe to call from the render thread. */
+	public java.util.List<Spawned> spawnedPacks()
+	{
+		java.util.List<Spawned> out = new java.util.ArrayList<>(tiles.size());
+		for (Map.Entry<String, WorldPoint> e : tiles.entrySet())
+		{
+			String tier = tierById.get(e.getKey());
+			out.add(new Spawned(e.getKey(), e.getValue(), tier == null ? "" : tier));
+		}
+		return out;
 	}
 }

@@ -26,13 +26,34 @@ public class TcgOverlay extends Overlay
 	private final TcgConfig config;
 	private final ImageCache images;
 
-	private long startedAt = 0;
-	private Color tierColor = new Color(0xC3, 0x96, 0x40);
-	private String tier = "";
-	private String tierLabel = "";
-	// Release-specific booster art for the pack that dropped, fetched off the render thread in
-	// trigger(); null until it lands, so render() falls back to the bundled tier art meanwhile.
-	private volatile BufferedImage packImg = null;
+	/** One drop animation: all fields for one trigger, published atomically (audit M7). */
+	private static final class DropAnim
+	{
+		final long startedAt;
+		final String tier;
+		final String label;
+		final Color color;
+		volatile BufferedImage packImg; // arrives later from the fetch; tied to THIS anim only
+
+		DropAnim(long startedAt, String tier, String label, Color color)
+		{
+			this.startedAt = startedAt;
+			this.tier = tier;
+			this.label = label;
+			this.color = color;
+		}
+	}
+
+	private final java.util.concurrent.atomic.AtomicReference<DropAnim> anim =
+		new java.util.concurrent.atomic.AtomicReference<>();
+
+	private java.util.concurrent.Executor netExec;
+
+	/** Route the pack-art fetch through the plugin's net pool instead of an ad-hoc thread (L9). */
+	public void setNetExecutor(java.util.concurrent.Executor ex)
+	{
+		this.netExec = ex;
+	}
 
 	@Inject
 	public TcgOverlay(TcgConfig config, ImageCache images)
@@ -50,22 +71,42 @@ public class TcgOverlay extends Overlay
 	 */
 	public void trigger(String tier, String packArtUrl)
 	{
-		this.tier = tier == null ? "" : tier;
-		this.tierLabel = tier == null ? "" : tier.toUpperCase();
-		this.tierColor = colorForTier(tier);
-		this.packImg = null;
-		this.startedAt = System.currentTimeMillis();
+		final String t = tier == null ? "" : tier;
+		final DropAnim a = new DropAnim(System.currentTimeMillis(), t, t.toUpperCase(), colorForTier(tier));
+		anim.set(a);
 		if (packArtUrl != null && images != null)
 		{
 			final String url = ImageCache.pngUrl(packArtUrl);
-			new Thread(() ->
+			runAsync(() ->
 			{
 				BufferedImage img = images.get(url);
 				if (img != null)
 				{
-					this.packImg = img;
+					// Publishes onto THIS trigger's anim only — a newer trigger's object is
+					// untouched, so no cross-drop art/label mixing.
+					a.packImg = img;
 				}
-			}, "lootdeck-droppackart").start();
+			});
+		}
+	}
+
+	private void runAsync(Runnable r)
+	{
+		java.util.concurrent.Executor ex = netExec;
+		try
+		{
+			if (ex != null)
+			{
+				ex.execute(r);
+			}
+			else
+			{
+				new Thread(r, "lootdeck-droppackart").start(); // pre-startUp fallback
+			}
+		}
+		catch (RuntimeException ignored)
+		{
+			// pool shutting down — skip the fetch
 		}
 	}
 
@@ -93,16 +134,19 @@ public class TcgOverlay extends Overlay
 	@Override
 	public Dimension render(Graphics2D g)
 	{
-		if (!config.enableAnimation() || startedAt == 0)
+		final DropAnim a = anim.get();
+		if (!config.enableAnimation() || a == null)
 		{
 			return null;
 		}
-		long elapsed = System.currentTimeMillis() - startedAt;
+		long elapsed = System.currentTimeMillis() - a.startedAt;
 		if (elapsed > DURATION_MS)
 		{
-			startedAt = 0;
+			// Only clear the anim we just rendered — never a newer trigger that raced in.
+			anim.compareAndSet(a, null);
 			return null;
 		}
+		final Color tierColor = a.color;
 
 		float t = elapsed / (float) DURATION_MS; // 0..1
 		float grow = Math.min(1f, t * 2f); // grows in first half
@@ -131,7 +175,7 @@ public class TcgOverlay extends Overlay
 		BufferedImage art = null;
 		if (w > 0 && h > 0)
 		{
-			art = packImg != null ? packImg : PackArt.image(tier);
+			art = a.packImg != null ? a.packImg : PackArt.image(a.tier);
 		}
 		if (art != null)
 		{
@@ -153,7 +197,7 @@ public class TcgOverlay extends Overlay
 		// label
 		g.setFont(new Font("SansSerif", Font.BOLD, 14));
 		g.setColor(new Color(0xf3, 0xe6, 0xc3, alpha));
-		g.drawString(tierLabel + " PACK!", cx - 34, cy + h / 2 + 20);
+		g.drawString(a.label + " PACK!", cx - 34, cy + h / 2 + 20);
 
 		return new Dimension(240, 240);
 	}

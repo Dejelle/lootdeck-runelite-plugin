@@ -11,13 +11,18 @@ public final class Dtos
 
 	public static final class DropContext
 	{
-		public int itemId;
+		// Integer (not int) so Gson OMITS these when null: a kill sends {quantity,combatLevel}
+		// with no itemId; a SKILL_GATHER sends {itemId,quantity} with no combatLevel. A primitive
+		// int would serialize as 0 and fail the server's positive-int validation.
+		public Integer itemId;
 		public int quantity;
+		public Integer combatLevel;
 
-		public DropContext(int itemId, int quantity)
+		public DropContext(Integer itemId, int quantity, Integer combatLevel)
 		{
 			this.itemId = itemId;
 			this.quantity = quantity;
+			this.combatLevel = combatLevel;
 		}
 	}
 
@@ -67,6 +72,7 @@ public final class Dtos
 	{
 		public List<UserPack> packs;
 		public java.util.Map<String, Integer> countsByTier;
+		public String cardBackUrl;  // global card back (CDN .png?v=); null = use bundled
 	}
 
 	/** A card definition as returned inside an opened-pack item. */
@@ -147,6 +153,32 @@ public final class Dtos
 		{
 			this.setCode = setCode;
 		}
+	}
+
+	/** POST /feedback/plugin body. */
+	public static final class FeedbackReq
+	{
+		public String kind;      // "bug" | "feedback"
+		public String message;
+		public java.util.Map<String, String> context;
+	}
+
+	/** POST /feedback/plugin response. */
+	public static final class FeedbackResp
+	{
+		public String id;
+		public String createdAt;
+	}
+
+	/** GET /plugin/link/status?accountHash= — per-character link status for the sidebar. */
+	public static final class LinkStatusResp
+	{
+		public boolean linked;      // some LootDeck account has linked this character
+		public boolean thisUser;    // ...and it is the token's owner
+		public String displayName;  // this character's RSN (null unless thisUser)
+		public int linkedCount;     // characters the token's user has linked
+		public int maxAccounts;     // admin-configured cap
+		public boolean atMax;       // linkedCount >= maxAccounts
 	}
 
 	/** { error: { code, message } } */

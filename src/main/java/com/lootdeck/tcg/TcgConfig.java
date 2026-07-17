@@ -66,12 +66,45 @@ public interface TcgConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "highlightGroundPacks",
+		name = "Highlight dropped packs",
+		description = "Draw a coloured tile highlight and floating label on a dropped booster pack so it stands out among other loot.",
+		position = 5
+	)
+	default boolean highlightGroundPacks()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "leftClickTakePack",
+		name = "Left-click take packs",
+		description = "Make 'Take Booster Pack' the left-click action on the pack's tile (off = right-click menu only).",
+		position = 6
+	)
+	default boolean leftClickTakePack()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "enableInClientOpen",
 		name = "Open packs in-client",
 		description = "Open packs with an animated reveal inside RuneLite (off = open on the website).",
-		position = 5
+		position = 7
 	)
 	default boolean enableInClientOpen()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "blockPackActionsInCombat",
+		name = "Block pack actions in combat",
+		description = "Prevent taking ground packs and opening packs while you are in combat, so a misclick during a fight can't interrupt you.",
+		position = 8
+	)
+	default boolean blockPackActionsInCombat()
 	{
 		return true;
 	}

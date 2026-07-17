@@ -28,6 +28,9 @@ public final class PackArt
 	// only probe the classpath once per key.
 	private static final Map<String, Optional<BufferedImage>> PACKS = new ConcurrentHashMap<>();
 	private static volatile Optional<BufferedImage> cardBack;
+	// CDN-fetched card back (Phase 5). When set, overrides the bundled back so a new card back
+	// propagates without a plugin release. Null = fall back to the bundled classpath resource.
+	private static volatile BufferedImage fetchedCardBack;
 
 	public static Color tierColor(String tier)
 	{
@@ -60,9 +63,23 @@ public final class PackArt
 		return PACKS.computeIfAbsent(tier, t -> Optional.ofNullable(load("packs/" + t + ".png"))).orElse(null);
 	}
 
-	/** Bundled universal card back (full-res, cached). Null if the resource is missing. */
+	/** Override the bundled card back with a CDN-fetched image (null = clear, use bundled). */
+	public static void setFetchedCardBack(BufferedImage img)
+	{
+		fetchedCardBack = img;
+	}
+
+	/**
+	 * Universal card back. Prefers a CDN-fetched image (Phase 5, so a new back propagates without a
+	 * plugin release), else the bundled classpath resource (full-res, cached). Null if both miss.
+	 */
 	public static BufferedImage cardBack()
 	{
+		BufferedImage fetched = fetchedCardBack;
+		if (fetched != null)
+		{
+			return fetched;
+		}
 		Optional<BufferedImage> c = cardBack;
 		if (c == null)
 		{

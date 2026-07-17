@@ -23,6 +23,8 @@ import net.runelite.api.Client;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Full-screen, client-side pack-open reveal. Data (cards + their rarities) is fetched off-thread
@@ -35,8 +37,21 @@ public class PackOpenOverlay extends Overlay
 	private static final long INTRO_MS = 650L;
 	private static final long FLIP_MS = 300L; // 150ms back-collapse + 150ms face-expand
 
+	private static final Logger log = LoggerFactory.getLogger(PackOpenOverlay.class);
+
+	// Hoisted per-frame allocations (audit L10). Colors with a variable alpha (the bg dim) can't
+	// be hoisted and stay inline.
+	private static final Font PROMPT_FONT = new Font("SansSerif", Font.BOLD, 18);
+	private static final Font BACK_FONT = new Font("Serif", Font.BOLD, 12);
+	private static final Font PLACEHOLDER_FONT = new Font("SansSerif", Font.PLAIN, 11);
+	private static final Color CREAM = new Color(0xf3, 0xe6, 0xc3);
+	private static final Color CARD_BG = new Color(0x19, 0x13, 0x09);
+
 	private final Client client;
 	private final ImageCache images;
+	// The plugin's net pool: all art fetches run here (never ad-hoc threads) so they die with the
+	// plugin and never touch the render thread (audit C3/L11).
+	private final java.util.concurrent.Executor netExec;
 
 	private volatile boolean active = false;
 	private volatile List<Dtos.OpenedCard> cards = null;
@@ -47,6 +62,8 @@ public class PackOpenOverlay extends Overlay
 	// Release-specific booster art, fetched off-thread in show(); null until it lands (then the
 	// intro uses it in place of the bundled tier art). render() never blocks on I/O.
 	private volatile BufferedImage packImg = null;
+	// Bumped per show(); async art fetches capture it and only publish if still current (audit L11).
+	private volatile int generation = 0;
 
 	// Card faces pre-scaled to their on-screen size with a high-quality multi-step downscale, so the
 	// reveal draws them ~1:1 (crisp). Otherwise every frame squashes the full 512px+ bake down to
@@ -56,16 +73,24 @@ public class PackOpenOverlay extends Overlay
 	private final Map<String, BufferedImage> faceCache = new ConcurrentHashMap<>();
 	private final Set<String> facePending = ConcurrentHashMap.newKeySet();
 
-	public PackOpenOverlay(Client client, ImageCache images)
+	public PackOpenOverlay(Client client, ImageCache images, java.util.concurrent.Executor netExec)
 	{
 		this.client = client;
 		this.images = images;
+		this.netExec = netExec;
 		setLayer(OverlayLayer.ABOVE_WIDGETS);
 		setPosition(OverlayPosition.DYNAMIC);
 	}
 
 	public void show(String tier, String packArtUrl, List<Dtos.OpenedCard> cards)
 	{
+		if (active)
+		{
+			// doOpen() already refuses while active (M8); this is the belt for that suspender.
+			log.warn("[LootDeck] show() called while a reveal is active — ignoring");
+			return;
+		}
+		generation++;
 		this.tier = tier == null ? "" : tier;
 		this.cards = cards;
 		this.revealed = 0;
@@ -76,18 +101,43 @@ public class PackOpenOverlay extends Overlay
 		faceCache.clear();
 		facePending.clear();
 		// Fetch the release's booster art off the render thread; drawIntro falls back to the
-		// bundled tier art until this resolves.
+		// bundled tier art until this resolves. Guard on generation so a stale fetch from a
+		// previous open never paints onto a newer one.
 		if (packArtUrl != null && images != null)
 		{
 			final String url = ImageCache.pngUrl(packArtUrl);
-			new Thread(() ->
+			final int gen = generation;
+			runAsync(() ->
 			{
 				BufferedImage img = images.get(url);
-				if (img != null)
+				if (img != null && gen == generation)
 				{
 					this.packImg = img;
 				}
-			}, "lootdeck-packart").start();
+			});
+		}
+		// Pre-fetch every face now, so each flip finds its art in memory (audit C3).
+		if (cards != null)
+		{
+			for (Dtos.OpenedCard c : cards)
+			{
+				if (c.definition != null)
+				{
+					images.prefetch(ImageCache.pngUrl(c.definition.baseImageUrl), netExec);
+				}
+			}
+		}
+	}
+
+	/** Run on the plugin's net pool; swallow rejection if the pool is shutting down. */
+	private void runAsync(Runnable r)
+	{
+		try
+		{
+			netExec.execute(r);
+		}
+		catch (RuntimeException ignored)
+		{
 		}
 	}
 
@@ -129,7 +179,16 @@ public class PackOpenOverlay extends Overlay
 	@Override
 	public Dimension render(Graphics2D g)
 	{
-		if (!active || cards == null || cards.isEmpty())
+		if (!active)
+		{
+			return null;
+		}
+		// Snapshot the volatile fields once so a concurrent advance()/close() can't tear this frame
+		// (audit M8). Everything below reads these locals, not the fields.
+		final List<Dtos.OpenedCard> cards = this.cards;
+		final long[] revealedAt = this.revealedAt;
+		final int revealed = Math.min(this.revealed, cards != null ? cards.size() : 0);
+		if (cards == null || cards.isEmpty())
 		{
 			return null;
 		}
@@ -157,8 +216,8 @@ public class PackOpenOverlay extends Overlay
 		}
 
 		// Title / prompt.
-		g.setFont(new Font("SansSerif", Font.BOLD, 18));
-		g.setColor(new Color(0xf3, 0xe6, 0xc3));
+		g.setFont(PROMPT_FONT);
+		g.setColor(CREAM);
 		String prompt = revealed >= cards.size()
 			? "Click to close" : "Click to reveal (" + revealed + "/" + cards.size() + ")";
 		g.drawString(prompt, W / 2 - g.getFontMetrics().stringWidth(prompt) / 2, 40);
@@ -312,7 +371,7 @@ public class PackOpenOverlay extends Overlay
 		g.drawRoundRect(x, y, w, h, 12, 12);
 		if (w > 40)
 		{
-			g.setFont(new Font("Serif", Font.BOLD, 12));
+			g.setFont(BACK_FONT);
 			g.setColor(new Color(0xc9, 0xa3, 0x4e));
 			String s = "LootDeck";
 			g.drawString(s, x + w / 2 - g.getFontMetrics().stringWidth(s) / 2, y + h / 2);
@@ -322,7 +381,13 @@ public class PackOpenOverlay extends Overlay
 	private void drawFace(Graphics2D g, Dtos.OpenedCard c, int x, int y, int w, int h, Color glow, long now)
 	{
 		String url = c.definition != null ? ImageCache.pngUrl(c.definition.baseImageUrl) : null;
-		BufferedImage img = url != null ? images.get(url) : null;
+		// peek() never blocks (render() is on the client thread); prefetch() re-requests a face
+		// whose earlier fetch failed, rate-limited by the negative cache (audit C3).
+		BufferedImage img = url != null ? images.peek(url) : null;
+		if (img == null && url != null)
+		{
+			images.prefetch(url, netExec);
+		}
 		if (img != null)
 		{
 			// Draw a copy pre-scaled to the card's resting size (h / 1.4 wide — the full width the flip
@@ -335,15 +400,15 @@ public class PackOpenOverlay extends Overlay
 		else
 		{
 			// Placeholder while art loads.
-			g.setColor(new Color(0x19, 0x13, 0x09));
+			g.setColor(CARD_BG);
 			g.fillRoundRect(x, y, w, h, 12, 12);
 			g.setColor(glow);
 			g.setStroke(new java.awt.BasicStroke(2f));
 			g.drawRoundRect(x, y, w, h, 12, 12);
 			if (c.definition != null && c.definition.name != null && w > 40)
 			{
-				g.setFont(new Font("SansSerif", Font.PLAIN, 11));
-				g.setColor(new Color(0xf3, 0xe6, 0xc3));
+				g.setFont(PLACEHOLDER_FONT);
+				g.setColor(CREAM);
 				g.drawString(c.definition.name, x + 6, y + h / 2);
 			}
 		}
@@ -407,7 +472,7 @@ public class PackOpenOverlay extends Overlay
 		}
 		if (facePending.add(key))
 		{
-			new Thread(() ->
+			runAsync(() ->
 			{
 				try
 				{
@@ -421,7 +486,7 @@ public class PackOpenOverlay extends Overlay
 				{
 					facePending.remove(key);
 				}
-			}, "lootdeck-prescale").start();
+			});
 		}
 		return null;
 	}

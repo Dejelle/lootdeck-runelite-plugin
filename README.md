@@ -21,7 +21,9 @@ ported into the main project and flow back through the next release commit.
   - A gameplay event when you do a qualifying activity: an activity id (e.g. `KILL_ZULRAH`,
     `CLUE_HARD`) or, for gathering, a resource **item id + quantity**. Plus a timestamp and a
     random idempotency id.
-  - Your linked account's low-privilege bearer token (issued at link time) on each request.
+  - Your linked account's low-privilege bearer token (issued at link time) and a plugin version
+    header on each request.
+  - Your current world number, only when you submit a bug report from the plugin.
 - **What is NOT sent:** no passwords, no bank contents, no chat, no location, no automation.
 - **No gameplay effect, no real-money value.** Cards are cosmetic collectibles.
 - **Standard profile only:** Leagues/DMM/beta worlds are ignored.

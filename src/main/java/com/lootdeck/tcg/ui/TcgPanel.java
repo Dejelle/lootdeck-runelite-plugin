@@ -1,5 +1,6 @@
 package com.lootdeck.tcg.ui;
 
+import com.lootdeck.tcg.LinkState;
 import com.lootdeck.tcg.net.Dtos;
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -36,12 +37,20 @@ public class TcgPanel extends PluginPanel
 	private static final int PACK_MAX_CELLS = PACK_COLS * 2;
 	private static final int OPENINGS_MAX = 3;
 
+	/** Bright parchment-gold for section titles — higher contrast than
+	 *  ColorScheme.BRAND_ORANGE on the dark panel (see plan/improvements-2026-07/
+	 *  01-plugin-sidebar-title-readability/DESIGN.md). */
+	private static final Color TITLE_GOLD = new Color(0xF3, 0xC1, 0x5F);
+
 	// Stable website URLs only — never a payment-provider URL (plugin ships once;
 	// the website can change providers without a plugin update).
 	private static final String WEBSITE_URL = "https://www.lootdeck.org";
 	private static final String DONATE_URL = WEBSITE_URL + "/donate";
+	private static final String COLLECTION_URL = WEBSITE_URL + "/collection";
 	private static final String LINK_PAGE_URL = WEBSITE_URL + "/link";
 	private static final String SIGNIN_URL = WEBSITE_URL + "/signin";
+	/** Website feedback form — the fallback for unlinked users (see TcgPlugin.doFeedback). */
+	public static final String FEEDBACK_URL = WEBSITE_URL + "/feedback";
 
 	private final JPanel content = new JPanel();
 
@@ -49,16 +58,19 @@ public class TcgPanel extends PluginPanel
 	};
 	private Consumer<String> claimHandler = id -> {
 	};
-	private Runnable refreshHandler = () -> {
-	};
 
-	private boolean linked = false;
+	private LinkState linkState = LinkState.NOT_LINKED;
+	private int linkedCount = 0;
+	private int maxAccounts = 0;
 	private String rsn = "";
-	private Map<String, Integer> packCounts = java.util.Collections.emptyMap();
 	private List<Dtos.UserPack> packList = java.util.Collections.emptyList();
 	private List<Dtos.PendingPack> pending = java.util.Collections.emptyList();
 	private final java.util.Deque<String> feed = new java.util.ArrayDeque<>();
+	// Re-renders the "(Ns)" countdown on pending Take rows once per second while any exist (L13).
+	private final javax.swing.Timer pendingTicker = new javax.swing.Timer(1000, e -> rebuild());
 	private Consumer<Dtos.UserPack> openHandler = p -> {
+	};
+	private Runnable feedbackHandler = () -> {
 	};
 	private List<Dtos.Opening> openings = java.util.Collections.emptyList();
 	private boolean openingsExpanded = false;
@@ -77,6 +89,34 @@ public class TcgPanel extends PluginPanel
 	public void setImageCache(com.lootdeck.tcg.net.ImageCache c)
 	{
 		this.images = c;
+	}
+
+	private java.util.concurrent.Executor netExec;
+
+	/** Route image fetches through the plugin's net pool instead of ad-hoc threads (audit L9). */
+	public void setNetExecutor(java.util.concurrent.Executor ex)
+	{
+		this.netExec = ex;
+	}
+
+	private void runAsync(Runnable r)
+	{
+		java.util.concurrent.Executor ex = netExec;
+		try
+		{
+			if (ex != null)
+			{
+				ex.execute(r);
+			}
+			else
+			{
+				new Thread(r, "lootdeck-panel-img").start(); // pre-startUp fallback
+			}
+		}
+		catch (RuntimeException ignored)
+		{
+			// pool shutting down — skip the fetch
+		}
 	}
 
 	public TcgPanel()
@@ -102,22 +142,19 @@ public class TcgPanel extends PluginPanel
 		this.claimHandler = h;
 	}
 
-	public void setRefreshHandler(Runnable h)
+	public void updateLinkState(LinkState state, String rsn, int linkedCount, int maxAccounts)
 	{
-		this.refreshHandler = h;
-	}
-
-	public void updateLinked(boolean linked, String rsn)
-	{
-		this.linked = linked;
+		this.linkState = state == null ? LinkState.UNKNOWN : state;
 		this.rsn = rsn == null ? "" : rsn;
+		this.linkedCount = linkedCount;
+		this.maxAccounts = maxAccounts;
 		SwingUtilities.invokeLater(this::rebuild);
 	}
 
-	public void updatePacks(Map<String, Integer> counts)
+	/** LINKED and UNKNOWN (fail-open) both render as a working, linked panel. */
+	private boolean showLinkedFeatures()
 	{
-		this.packCounts = counts;
-		SwingUtilities.invokeLater(this::rebuild);
+		return linkState == LinkState.LINKED || linkState == LinkState.UNKNOWN;
 	}
 
 	public void updatePackList(List<Dtos.UserPack> packs)
@@ -129,6 +166,11 @@ public class TcgPanel extends PluginPanel
 	public void setOpenHandler(Consumer<Dtos.UserPack> h)
 	{
 		this.openHandler = h;
+	}
+
+	public void setFeedbackHandler(Runnable r)
+	{
+		this.feedbackHandler = r;
 	}
 
 	public void updatePending(List<Dtos.PendingPack> pending)
@@ -152,12 +194,22 @@ public class TcgPanel extends PluginPanel
 
 	public void addFeed(String line)
 	{
-		feed.addFirst(line);
-		while (feed.size() > 3)
+		// The deque lives entirely on the EDT, like every other panel structure (audit H5).
+		SwingUtilities.invokeLater(() ->
 		{
-			feed.removeLast();
-		}
-		SwingUtilities.invokeLater(this::rebuild);
+			feed.addFirst(line);
+			while (feed.size() > 3)
+			{
+				feed.removeLast();
+			}
+			rebuild();
+		});
+	}
+
+	/** Test hook: current feed size (read on the EDT). */
+	int feedSize()
+	{
+		return feed.size();
 	}
 
 	// ---- Styling helpers: nothing in this panel may rely on light LAF defaults. ----
@@ -213,8 +265,8 @@ public class TcgPanel extends PluginPanel
 	private JLabel header(String text)
 	{
 		JLabel l = new JLabel(text);
-		l.setFont(l.getFont().deriveFont(Font.BOLD, 13f));
-		l.setForeground(ColorScheme.BRAND_ORANGE);
+		l.setFont(l.getFont().deriveFont(Font.BOLD, 14f));
+		l.setForeground(TITLE_GOLD);
 		l.setBorder(BorderFactory.createEmptyBorder(10, 4, 4, 4));
 		l.setAlignmentX(Component.LEFT_ALIGNMENT);
 		return l;
@@ -224,18 +276,43 @@ public class TcgPanel extends PluginPanel
 	{
 		content.removeAll();
 
-		if (!linked)
+		if (showLinkedFeatures())
 		{
-			content.add(header("Link your account"));
-			JLabel help = new JLabel("<html>Get a code at the website's Link page, paste it below.</html>");
+			content.add(header("Linked"));
+			content.add(body(rsn.isEmpty() ? "Linked" : "Linked as " + rsn));
+		}
+		else if (linkState == LinkState.MAX_REACHED)
+		{
+			content.add(header("Account full"));
+			// Slot counts only when the server actually sent them (maxAccounts > 0).
+			String slots = maxAccounts > 0 ? " (" + linkedCount + "/" + maxAccounts + ")" : "";
+			content.add(body("<html>Max linked accounts reached" + slots
+				+ ". Manage your characters at lootdeck.org/link.</html>"));
+			JButton openLinkPage = button("Open Link page");
+			openLinkPage.addActionListener(e -> LinkBrowser.browse(LINK_PAGE_URL));
+			content.add(openLinkPage);
+		}
+		else if (linkState == LinkState.OTHER_USER)
+		{
+			content.add(header("Linked elsewhere"));
+			content.add(body("<html>This character is linked to a different LootDeck account.</html>"));
+		}
+		else
+		{
+			// NOT_LINKED — this character can be linked to the token's account.
+			content.add(header("Link this character"));
+			JLabel help = new JLabel("<html>" + (rsn.isEmpty() ? "This character" : rsn)
+				+ " isn't linked to your LootDeck account yet. Get a code at lootdeck.org/link and"
+				+ " enter it below.</html>");
 			help.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 			help.setAlignmentX(Component.LEFT_ALIGNMENT);
 			content.add(help);
 			// Plugin Hub data-sharing disclosure — shown in-client BEFORE the user opts in by linking.
 			JLabel disclosure = new JLabel("<html>Linking is opt-in. Once linked, the plugin sends your"
 				+ " account hash, display name and qualifying gameplay events (activity ids, gathered"
-				+ " item ids + quantities) to the LootDeck service. It never sends chat, bank contents,"
-				+ " location or passwords.</html>");
+				+ " item ids + quantities) to the LootDeck service, plus your current world when you"
+				+ " submit a bug report, and a plugin version header on every request. It never sends"
+				+ " chat, bank contents, location or passwords.</html>");
 			disclosure.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 			disclosure.setFont(disclosure.getFont().deriveFont(11f));
 			disclosure.setBorder(BorderFactory.createEmptyBorder(4, 0, 2, 0));
@@ -262,16 +339,10 @@ public class TcgPanel extends PluginPanel
 			openLinkPage.addActionListener(e -> LinkBrowser.browse(LINK_PAGE_URL));
 			content.add(openLinkPage);
 		}
-		else
-		{
-			content.add(header("Linked"));
-			content.add(body("Linked as " + (rsn.isEmpty() ? "your account" : rsn)));
-			content.add(muted("<html>Sending qualifying gameplay to the LootDeck service.</html>"));
-		}
 
 		// Booster release picker — which card release NEW packs come from. With a single
 		// release it is a one-item dropdown; it becomes meaningful from release 2 on.
-		if (linked && !releases.isEmpty())
+		if (showLinkedFeatures() && !releases.isEmpty())
 		{
 			content.add(header("Booster release"));
 			content.add(releasePicker());
@@ -352,10 +423,6 @@ public class TcgPanel extends PluginPanel
 			}
 		}
 
-		JButton refresh = button("Refresh");
-		refresh.addActionListener(e -> refreshHandler.run());
-		content.add(refresh);
-
 		// Quiet footer links: create an account on the website, or donate. "Create account" is
 		// the wider label, so it takes the larger share of the row (GridBag weightx) and the
 		// shorter "Donate" gets the rest; tighter button padding keeps both from truncating in
@@ -370,10 +437,23 @@ public class TcgPanel extends PluginPanel
 		gc.gridy = 0;
 		gc.fill = java.awt.GridBagConstraints.HORIZONTAL;
 
+		// Full-width "View collection" on top — the main website destination for players.
+		JButton viewCollection = button("View collection");
+		viewCollection.setMargin(new java.awt.Insets(4, 4, 4, 4));
+		viewCollection.addActionListener(e -> LinkBrowser.browse(COLLECTION_URL));
+		gc.gridx = 0;
+		gc.gridy = 0;
+		gc.gridwidth = 2;
+		gc.weightx = 1.0;
+		gc.insets = new java.awt.Insets(0, 0, 4, 0);
+		links.add(viewCollection, gc);
+		gc.gridwidth = 1;
+
 		JButton createAccount = button("Create account");
 		createAccount.setMargin(new java.awt.Insets(4, 4, 4, 4));
 		createAccount.addActionListener(e -> LinkBrowser.browse(SIGNIN_URL));
 		gc.gridx = 0;
+		gc.gridy = 1;
 		gc.weightx = 0.6;
 		gc.insets = new java.awt.Insets(0, 0, 0, 2);
 		links.add(createAccount, gc);
@@ -382,11 +462,48 @@ public class TcgPanel extends PluginPanel
 		donate.setMargin(new java.awt.Insets(4, 4, 4, 4));
 		donate.addActionListener(e -> LinkBrowser.browse(DONATE_URL));
 		gc.gridx = 1;
+		gc.gridy = 1;
 		gc.weightx = 0.4;
 		gc.insets = new java.awt.Insets(0, 2, 0, 0);
 		links.add(donate, gc);
 
+		// Full-width "Report a bug" row below the two buttons so its longer label never truncates
+		// in the narrow panel. The plugin decides linked (in-client dialog) vs unlinked (website form).
+		JButton feedback = button("Report a bug");
+		feedback.setMargin(new java.awt.Insets(4, 4, 4, 4));
+		feedback.addActionListener(e -> feedbackHandler.run());
+		gc.gridx = 0;
+		gc.gridy = 2;
+		gc.gridwidth = 2;
+		gc.weightx = 1.0;
+		gc.insets = new java.awt.Insets(4, 0, 0, 0);
+		links.add(feedback, gc);
+
 		content.add(links);
+
+		// Always-visible data disclaimer, quiet and at the very bottom. The fuller
+		// pre-opt-in disclosure in the NOT_LINKED branch above is a Plugin Hub
+		// requirement and stays as-is.
+		JLabel disclaimer = new JLabel("<html>Disclaimer: while your character is linked, this"
+			+ " plugin collects basic gameplay events (activities and gathered items) to generate"
+			+ " booster pack drops, plus your current world when you submit a bug report and a plugin"
+			+ " version header on requests. It never collects chat, bank contents or passwords.</html>");
+		disclaimer.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		disclaimer.setFont(disclaimer.getFont().deriveFont(10f));
+		disclaimer.setBorder(BorderFactory.createEmptyBorder(12, 4, 4, 4));
+		disclaimer.setAlignmentX(Component.LEFT_ALIGNMENT);
+		content.add(disclaimer);
+
+		// Run the 1s countdown ticker only while there are pending Take rows to animate.
+		boolean hasPending = pending != null && !pending.isEmpty();
+		if (hasPending && !pendingTicker.isRunning())
+		{
+			pendingTicker.start();
+		}
+		else if (!hasPending && pendingTicker.isRunning())
+		{
+			pendingTicker.stop();
+		}
 
 		content.revalidate();
 		content.repaint();
@@ -482,7 +599,7 @@ public class TcgPanel extends PluginPanel
 			if (images != null && c.definition != null)
 			{
 				final String url = com.lootdeck.tcg.net.ImageCache.pngUrl(c.definition.thumbImageUrl);
-				new Thread(() ->
+				runAsync(() ->
 				{
 					java.awt.image.BufferedImage img = images.get(url);
 					if (img != null)
@@ -490,7 +607,7 @@ public class TcgPanel extends PluginPanel
 						java.awt.Image scaled = img.getScaledInstance(34, 48, java.awt.Image.SCALE_SMOOTH);
 						SwingUtilities.invokeLater(() -> t.setIcon(new javax.swing.ImageIcon(scaled)));
 					}
-				}, "lootdeck-thumb").start();
+				});
 			}
 		}
 		row.add(thumbs);
@@ -525,7 +642,7 @@ public class TcgPanel extends PluginPanel
 		if (cached == null && p.packArtUrl != null && images != null)
 		{
 			final String url = com.lootdeck.tcg.net.ImageCache.pngUrl(p.packArtUrl);
-			new Thread(() ->
+			runAsync(() ->
 			{
 				java.awt.image.BufferedImage img = images.get(url);
 				if (img != null)
@@ -535,7 +652,7 @@ public class TcgPanel extends PluginPanel
 					packArtIcons.put(p.packArtUrl, ic);
 					SwingUtilities.invokeLater(() -> b.setIcon(ic));
 				}
-			}, "lootdeck-packart").start();
+			});
 		}
 		return b;
 	}
@@ -545,7 +662,7 @@ public class TcgPanel extends PluginPanel
 	{
 		JLabel l = new JLabel("+" + more);
 		l.setHorizontalAlignment(JLabel.CENTER);
-		l.setForeground(ColorScheme.BRAND_ORANGE);
+		l.setForeground(TITLE_GOLD);
 		l.setFont(l.getFont().deriveFont(Font.BOLD, 14f));
 		l.setOpaque(true);
 		l.setBackground(ColorScheme.DARKER_GRAY_COLOR);

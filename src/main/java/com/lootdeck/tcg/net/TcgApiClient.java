@@ -27,7 +27,13 @@ public class TcgApiClient
 	// Sent on every request so the API can tag genuine-plugin traffic. DETECTION SIGNAL ONLY —
 	// trivially spoofable, so the server must never grant or deny based on it (IMPLEMENTATION-PLAN Phase 2).
 	private static final String CLIENT_ID = "runelite-plugin";
-	private static final String PLUGIN_VERSION = "1.0"; // keep in sync with build.gradle + runelite-plugin.properties version
+	private static final String PLUGIN_VERSION = "1.4"; // keep in sync with build.gradle + runelite-plugin.properties version
+
+	/** The version string sent as X-LootDeck-Plugin-Version; also stamped into feedback context. */
+	public static String pluginVersion()
+	{
+		return PLUGIN_VERSION;
+	}
 
 	private final OkHttpClient http;
 	private final Gson gson;
@@ -74,10 +80,28 @@ public class TcgApiClient
 		return post("/drops/report", gson.toJson(report), Dtos.DropResult.class, true);
 	}
 
+	/** Per-character link status for the sidebar state machine (capped 1:N linking). */
+	public Dtos.LinkStatusResp linkStatus(String accountHash) throws ApiException
+	{
+		return get("/plugin/link/status?accountHash=" + accountHash, Dtos.LinkStatusResp.class, true);
+	}
+
+	private volatile String cardBackUrl;
+
+	/** Global card-back URL from the last pack-list poll (CDN .png?v=); null = use bundled. */
+	public String cardBackUrl()
+	{
+		return cardBackUrl;
+	}
+
 	public List<Dtos.UserPack> listPacks() throws ApiException
 	{
 		// Plugin-scoped route (the web /packs is JWT-only and 401s for plugin tokens).
 		Dtos.PacksResp resp = get("/plugin/packs", Dtos.PacksResp.class, true);
+		if (resp != null)
+		{
+			this.cardBackUrl = resp.cardBackUrl;
+		}
 		return resp != null && resp.packs != null ? resp.packs : Collections.emptyList();
 	}
 
@@ -101,6 +125,12 @@ public class TcgApiClient
 	public Dtos.ClaimResp claim(String pendingId) throws ApiException
 	{
 		return post("/packs/pending/" + pendingId + "/claim", "{}", Dtos.ClaimResp.class, true);
+	}
+
+	/** Submit an in-client bug report / feedback message (authed with the plugin token). */
+	public Dtos.FeedbackResp submitFeedback(Dtos.FeedbackReq req) throws ApiException
+	{
+		return post("/feedback/plugin", gson.toJson(req), Dtos.FeedbackResp.class, true);
 	}
 
 	/** Released card sets + the player's current pack-release selection. */
@@ -134,6 +164,16 @@ public class TcgApiClient
 
 	private <T> T execute(Request.Builder rb, Class<T> type, boolean authed) throws ApiException
 	{
+		// A phishing-supplied http:// apiBase would ship the bearer token in cleartext (L4).
+		// Parse properly — a startsWith("http://localhost") check would pass http://localhost.evil.com.
+		okhttp3.HttpUrl parsed = okhttp3.HttpUrl.parse(base() + "/");
+		if (parsed == null
+			|| (!"https".equals(parsed.scheme())
+				&& !"localhost".equals(parsed.host())
+				&& !"127.0.0.1".equals(parsed.host())))
+		{
+			throw new ApiException(400, "insecure_api_base");
+		}
 		// Channel tag on every request (authed or not). Detection-only; never a gate.
 		rb.header("X-LootDeck-Client", CLIENT_ID);
 		rb.header("X-LootDeck-Plugin-Version", PLUGIN_VERSION);
@@ -151,7 +191,22 @@ public class TcgApiClient
 			String body = resp.body() != null ? resp.body().string() : "";
 			if (!resp.isSuccessful())
 			{
-				throw new ApiException(resp.code(), parseError(body, resp.code()));
+				int retryAfter = 0;
+				if (resp.code() == 429)
+				{
+					try
+					{
+						String h = resp.header("Retry-After");
+						if (h != null)
+						{
+							retryAfter = Integer.parseInt(h.trim());
+						}
+					}
+					catch (NumberFormatException ignored)
+					{
+					}
+				}
+				throw new ApiException(resp.code(), parseError(body, resp.code()), retryAfter);
 			}
 			if (type == Void.class || body.isEmpty())
 			{
@@ -165,7 +220,8 @@ public class TcgApiClient
 		}
 		catch (JsonSyntaxException e)
 		{
-			throw new ApiException("bad_response", e);
+			// A 2xx whose body didn't parse — the grant already happened server-side (M2).
+			throw ApiException.malformedSuccess("bad_response", e);
 		}
 	}
 
