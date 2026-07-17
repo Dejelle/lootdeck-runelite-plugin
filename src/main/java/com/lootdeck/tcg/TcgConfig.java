@@ -43,17 +43,6 @@ public interface TcgConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "enableWorldObject",
-		name = "Show dropped pack in world",
-		description = "Spawn a cosmetic, client-side pack object on the drop tile you can pick up.",
-		position = 4
-	)
-	default boolean enableWorldObject()
-	{
-		return true;
-	}
-
-	@ConfigItem(
 		keyName = "highlightGroundPacks",
 		name = "Highlight dropped packs",
 		description = "Draw a coloured tile highlight and floating label on a dropped booster pack so it stands out among other loot.",

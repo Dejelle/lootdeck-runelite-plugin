@@ -377,10 +377,7 @@ public class TcgPlugin extends Plugin
 			}
 		}
 		// Slow-spin the top-tier ground packs (client thread — GameTick fires there).
-		if (config.enableWorldObject())
-		{
-			groundPacks.tickSpin();
-		}
+		groundPacks.tickSpin();
 		// Adjudicate deferred, transfer-filtered Sailing-salvage gathers and report them. Salvage
 		// is deferred to GameTick because a cargo-hold withdrawal's two container events (inventory
 		// gain + hold decrease) can fire in either order within the tick; the net decides the roll.
@@ -618,7 +615,7 @@ public class TcgPlugin extends Plugin
 		panel.addFeed("Pack dropped: " + tier);
 
 		// Spawn the cosmetic ground object at the captured tile (fallback: beside the player).
-		if (config.enableWorldObject() && result.pendingPackId != null)
+		if (result.pendingPackId != null)
 		{
 			final String pid = result.pendingPackId;
 			final String key = report.idempotencyKey;
@@ -690,7 +687,7 @@ public class TcgPlugin extends Plugin
 	@Subscribe
 	public void onPostMenuSort(PostMenuSort e)
 	{
-		if (!config.enableWorldObject() || client.getLocalPlayer() == null)
+		if (client.getLocalPlayer() == null)
 		{
 			return;
 		}
@@ -998,40 +995,25 @@ public class TcgPlugin extends Plugin
 			// leave counts as-is
 		}
 		// Ground packs live in the game world only — don't also list them as a "Take" row in the
-		// sidebar. Only fall back to the sidebar list when the world object is turned off.
-		if (config.enableWorldObject())
+		// sidebar. Only surface packs whose cosmetic object was LOST (e.g. the boat worldview
+		// unloaded before pickup) — in-world packs keep the "Take" flow.
+		try
 		{
-			// World objects on: only surface packs whose cosmetic object was LOST (e.g. the boat
-			// worldview unloaded before pickup) — in-world packs keep the "Take" flow.
-			try
+			java.util.List<Dtos.PendingPack> pend = api.listPending();
+			java.util.List<Dtos.PendingPack> lost = new java.util.ArrayList<>();
+			for (Dtos.PendingPack p : pend)
 			{
-				java.util.List<Dtos.PendingPack> pend = api.listPending();
-				java.util.List<Dtos.PendingPack> lost = new java.util.ArrayList<>();
-				for (Dtos.PendingPack p : pend)
+				// off-scene packs (object despawned) show in the sidebar with their Take button (M9)
+				if (p != null && p.id != null && !groundPacks.isVisible(p.id))
 				{
-					// off-scene packs (object despawned) show in the sidebar with their Take button (M9)
-					if (p != null && p.id != null && !groundPacks.isVisible(p.id))
-					{
-						lost.add(p);
-					}
+					lost.add(p);
 				}
-				panel.updatePending(lost);
 			}
-			catch (Exception ignored)
-			{
-				// leave pending as-is
-			}
+			panel.updatePending(lost);
 		}
-		else
+		catch (Exception ignored)
 		{
-			try
-			{
-				panel.updatePending(api.listPending());
-			}
-			catch (Exception ignored)
-			{
-				// leave pending as-is
-			}
+			// leave pending as-is
 		}
 		try
 		{

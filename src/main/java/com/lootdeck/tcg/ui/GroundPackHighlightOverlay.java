@@ -43,7 +43,7 @@ public class GroundPackHighlightOverlay extends Overlay
 	@Override
 	public Dimension render(Graphics2D g)
 	{
-		if (!config.enableWorldObject() || !config.highlightGroundPacks())
+		if (!config.highlightGroundPacks())
 		{
 			return null;
 		}
