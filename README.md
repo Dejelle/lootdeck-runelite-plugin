@@ -36,7 +36,7 @@ ported into the main project and flow back through the next release commit.
 
 ## Donations
 
-The side panel has a **Donate** button that opens `https://www.lootdeck.org/donate`. Donations are
+The side panel has a **Donate** button that opens `https://ko-fi.com/lootdeck`. Donations are
 voluntary, keep the servers running, and **grant nothing in-game** — no packs, no cards, no odds
 changes. There are no paid or "premium" plugin features; everything works for free.
 
@@ -72,8 +72,8 @@ RuneLite.main(args);
 3. RuneLite launches with **LootDeck** already enabled. Log into OSRS, open the LootDeck side
    panel, and paste a 6-char link code from the website's **Link** page.
 
-The plugin talks to the production API by default (`TcgConfig.apiBase`). To point it at a local
-server instead, edit the **API base URL** field in the plugin's config (e.g. `http://localhost:4000`).
+The plugin talks to the production API (a fixed endpoint — not a user-facing config field). To
+point it at a local server during development, pass the JVM flag `-Dlootdeck.apiBase=http://localhost:4000`.
 
 ## Plugin Hub submission
 
