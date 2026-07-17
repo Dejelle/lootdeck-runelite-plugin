@@ -32,18 +32,6 @@ public interface TcgConfig extends Config
 	void setToken(String token);
 
 	@ConfigItem(
-		keyName = "apiBase",
-		name = "API base URL",
-		description = "Advanced: override the LootDeck server URL.",
-		position = 2
-	)
-	default String apiBase()
-	{
-		// Production LootDeck API (overridable for local dev).
-		return "https://api-production-decd.up.railway.app";
-	}
-
-	@ConfigItem(
 		keyName = "enableAnimation",
 		name = "Drop animation",
 		description = "Show the drop animation overlay.",

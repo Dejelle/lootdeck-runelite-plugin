@@ -7,18 +7,14 @@ import com.lootdeck.tcg.TcgConfig;
 import java.lang.reflect.Proxy;
 import org.junit.Test;
 
-/** Guards the apiBase https lockdown (audit L4): a phishing http:// base must never ship the token. */
+/** Guards the API-base https lockdown (audit L4): a http:// base must never ship the token. */
 public class TcgApiClientTest
 {
-	private static TcgConfig config(String apiBase)
+	private static TcgConfig config()
 	{
 		return (TcgConfig) Proxy.newProxyInstance(TcgConfig.class.getClassLoader(),
 			new Class<?>[]{TcgConfig.class}, (proxy, method, args) ->
 			{
-				if ("apiBase".equals(method.getName()))
-				{
-					return apiBase;
-				}
 				if ("token".equals(method.getName()))
 				{
 					return "tok";
@@ -42,7 +38,9 @@ public class TcgApiClientTest
 
 	private static TcgApiClient client(String apiBase)
 	{
-		return new TcgApiClient(new okhttp3.OkHttpClient(), new com.google.gson.Gson(), config(apiBase));
+		// The 4-arg constructor is the package-private test seam that injects the base directly
+		// (the base is no longer a config item, so we can't go through TcgConfig any more).
+		return new TcgApiClient(new okhttp3.OkHttpClient(), new com.google.gson.Gson(), config(), apiBase);
 	}
 
 	@Test

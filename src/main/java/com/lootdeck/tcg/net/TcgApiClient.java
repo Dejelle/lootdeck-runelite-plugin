@@ -29,6 +29,12 @@ public class TcgApiClient
 	private static final String CLIENT_ID = "runelite-plugin";
 	private static final String PLUGIN_VERSION = "1.4"; // keep in sync with build.gradle + runelite-plugin.properties version
 
+	// Fixed production endpoint. Deliberately NOT a plugin config item: a user-facing "server URL"
+	// field is a phishing lever ("paste this URL to fix the plugin" -> token exfiltration). Local
+	// dev can still target a local server with -Dlootdeck.apiBase=http://localhost:4000 (a JVM flag,
+	// not something a chat message can set); the execute() https guard still vets whatever it resolves to.
+	private static final String DEFAULT_API_BASE = "https://api-production-decd.up.railway.app";
+
 	/** The version string sent as X-LootDeck-Plugin-Version; also stamped into feedback context. */
 	public static String pluginVersion()
 	{
@@ -38,9 +44,17 @@ public class TcgApiClient
 	private final OkHttpClient http;
 	private final Gson gson;
 	private final TcgConfig config;
+	private final String base;
 
 	@Inject
 	public TcgApiClient(OkHttpClient rlHttp, Gson gson, TcgConfig config)
+	{
+		this(rlHttp, gson, config, resolveBase());
+	}
+
+	// Package-private seam: an explicit base bypasses the system-property/default resolution.
+	// Used by tests to exercise the https guard against arbitrary bases.
+	TcgApiClient(OkHttpClient rlHttp, Gson gson, TcgConfig config, String base)
 	{
 		// Reuse RuneLite's connection pool. Timeouts are generous because the API can be
 		// slow to respond (cold/throttled hosting): a too-short read timeout turns a slow-but-
@@ -52,16 +66,23 @@ public class TcgApiClient
 			.build();
 		this.gson = gson;
 		this.config = config;
+		if (base.endsWith("/"))
+		{
+			base = base.substring(0, base.length() - 1);
+		}
+		this.base = base;
+	}
+
+	/** Production endpoint, unless a local-dev JVM flag overrides it (see DEFAULT_API_BASE). */
+	private static String resolveBase()
+	{
+		String override = System.getProperty("lootdeck.apiBase");
+		return override != null && !override.trim().isEmpty() ? override.trim() : DEFAULT_API_BASE;
 	}
 
 	private String base()
 	{
-		String b = config.apiBase();
-		if (b.endsWith("/"))
-		{
-			b = b.substring(0, b.length() - 1);
-		}
-		return b;
+		return base;
 	}
 
 	public Dtos.TokenResp redeem(String code, String accountHash, String rsn, String profileType)
@@ -164,8 +185,10 @@ public class TcgApiClient
 
 	private <T> T execute(Request.Builder rb, Class<T> type, boolean authed) throws ApiException
 	{
-		// A phishing-supplied http:// apiBase would ship the bearer token in cleartext (L4).
-		// Parse properly — a startsWith("http://localhost") check would pass http://localhost.evil.com.
+		// Defence in depth (audit L4): a misconfigured http:// base would ship the bearer token in
+		// cleartext. The base is no longer user-configurable, but a local-dev -Dlootdeck.apiBase override
+		// still passes through here. Parse properly — a startsWith("http://localhost") check would pass
+		// http://localhost.evil.com.
 		okhttp3.HttpUrl parsed = okhttp3.HttpUrl.parse(base() + "/");
 		if (parsed == null
 			|| (!"https".equals(parsed.scheme())

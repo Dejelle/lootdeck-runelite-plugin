@@ -42,15 +42,15 @@ public class TcgPanel extends PluginPanel
 	 *  01-plugin-sidebar-title-readability/DESIGN.md). */
 	private static final Color TITLE_GOLD = new Color(0xF3, 0xC1, 0x5F);
 
-	// Stable website URLs only — never a payment-provider URL (plugin ships once;
-	// the website can change providers without a plugin update).
+	// Stable website URLs — the website can change without a plugin update.
 	private static final String WEBSITE_URL = "https://www.lootdeck.org";
-	private static final String DONATE_URL = WEBSITE_URL + "/donate";
 	private static final String COLLECTION_URL = WEBSITE_URL + "/collection";
 	private static final String LINK_PAGE_URL = WEBSITE_URL + "/link";
 	private static final String SIGNIN_URL = WEBSITE_URL + "/signin";
 	/** Website feedback form — the fallback for unlinked users (see TcgPlugin.doFeedback). */
 	public static final String FEEDBACK_URL = WEBSITE_URL + "/feedback";
+	/** Ko-fi donation page, linked directly (see plan/donations/DESIGN.md). */
+	private static final String DONATE_URL = "https://ko-fi.com/lootdeck";
 
 	private final JPanel content = new JPanel();
 
@@ -426,9 +426,7 @@ public class TcgPanel extends PluginPanel
 		// Quiet footer links: create an account on the website, or donate. "Create account" is
 		// the wider label, so it takes the larger share of the row (GridBag weightx) and the
 		// shorter "Donate" gets the rest; tighter button padding keeps both from truncating in
-		// the narrow (~209px) panel. Both are stable website URLs — the Donate button opens the
-		// site's /donate page (which forwards to the current payment provider), never a
-		// payment-provider URL directly, so the provider can change without a plugin update.
+		// the narrow (~209px) panel. The Donate button opens the LootDeck Ko-fi page directly.
 		// Donations keep the servers running and grant nothing in-game — hard invariant, see
 		// plan/donations/DESIGN.md (D1/D5).
 		JPanel links = clear(new JPanel(new java.awt.GridBagLayout()));
