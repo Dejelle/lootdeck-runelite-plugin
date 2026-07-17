@@ -14,9 +14,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import javax.imageio.ImageIO;
 
 /**
- * Booster-pack + card-back art. Prefers bundled PNG assets shipped on the classpath
- * (src/main/resources/com/lootdeck/tcg/ui), falling back to a procedural render when a
- * resource is missing. Loaded lazily and cached; safe to call from the render thread.
+ * Booster-pack + card-back art. Pack art is served from the CDN (release-aware {@code packArtUrl})
+ * with a procedural {@link #render} as the offline fallback — <b>no pack PNGs are bundled</b> (they'd
+ * be stale per-release copies). The card back keeps a small bundled PNG fallback (card-back.png)
+ * beneath its optional CDN override. Loaded lazily and cached; safe to call from the render thread.
  */
 public final class PackArt
 {
@@ -53,7 +54,7 @@ public final class PackArt
 		}
 	}
 
-	/** Bundled pack art for a tier (full-res, cached). Null if the resource is missing. */
+	/** Bundled pack art for a tier, if any ship (none do today — pack art is CDN/procedural). Null when absent. */
 	public static BufferedImage image(String tier)
 	{
 		if (tier == null)
